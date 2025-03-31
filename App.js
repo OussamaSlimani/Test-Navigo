@@ -6,33 +6,73 @@ const routes = {
 
 const fallbackPage = "pages/404.html";
 
-// Function to load content dynamically
-function loadContent() {
-  let path = location.hash.replace("#", "") || "/";
+// Load cached pages from sessionStorage
+const cache = JSON.parse(sessionStorage.getItem("spaCache")) || {};
 
-  // Default to 404 if the route doesn't exist
-  const route = routes[path] || fallbackPage;
+// Preload pages into cache
+async function preloadPages() {
+  const pages = Object.values(routes).concat(fallbackPage);
 
-  fetch(route)
-    .then((response) => {
-      if (!response.ok) throw new Error("Page not found");
-      return response.text();
+  await Promise.all(
+    pages.map(async (route) => {
+      if (!cache[route]) {
+        try {
+          const response = await fetch(route);
+          if (response.ok) {
+            const data = await response.text();
+            cache[route] = data;
+          }
+        } catch (error) {
+          console.error(`Failed to preload ${route}:`, error);
+        }
+      }
     })
-    .then((data) => {
-      document.getElementById("contentWrapper").innerHTML = data;
-    })
-    .catch(() => {
-      // Load 404 page in case of any error
-      fetch(fallbackPage)
-        .then((response) => response.text())
-        .then((data) => {
-          document.getElementById("contentWrapper").innerHTML = data;
-        });
-    });
+  );
+
+  sessionStorage.setItem("spaCache", JSON.stringify(cache));
 }
 
-// Listen for hash changes
-window.addEventListener("hashchange", loadContent);
+// Function to load content dynamically
+async function loadContent() {
+  const path = location.hash.replace("#", "") || "/";
+  const route = routes[path] || fallbackPage;
 
-// Load initial content
-document.addEventListener("DOMContentLoaded", loadContent);
+  document.getElementById("contentWrapper").innerHTML =
+    cache[route] || "Loading...";
+
+  if (!cache[route]) {
+    try {
+      const response = await fetch(route);
+      if (response.ok) {
+        const data = await response.text();
+        cache[route] = data;
+        sessionStorage.setItem("spaCache", JSON.stringify(cache));
+        document.getElementById("contentWrapper").innerHTML = data;
+      } else {
+        throw new Error("Failed to fetch page");
+      }
+    } catch (error) {
+      console.error(`Error loading ${route}:`, error);
+      document.getElementById("contentWrapper").innerHTML =
+        cache[fallbackPage] || "Error loading page";
+    }
+  }
+}
+
+// Debounce function to limit hashchange event calls
+function debounce(func, delay = 100) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => func(...args), delay);
+  };
+}
+
+// Preload pages on startup
+document.addEventListener("DOMContentLoaded", async () => {
+  await preloadPages();
+  loadContent();
+});
+
+// Listen for hash changes with debounce
+window.addEventListener("hashchange", debounce(loadContent));
